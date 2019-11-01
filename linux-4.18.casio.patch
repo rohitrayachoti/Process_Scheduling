@@ -1,12 +1,12 @@
 diff --git a/Makefile b/Makefile
-index 7a3c454..6926d34 100644
+index 863f585..6926d34 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -2,7 +2,7 @@
  VERSION = 4
  PATCHLEVEL = 18
  SUBLEVEL = 0
--EXTRAVERSION = -rc8
+-EXTRAVERSION =
 +EXTRAVERSION = .casio
  NAME = Merciless Moray
  
@@ -47,7 +47,7 @@ index ead487e..44f4223 100644
  proc-$(CONFIG_PROC_KCORE)	+= kcore.o
 diff --git a/fs/proc/proc_misc.c b/fs/proc/proc_misc.c
 new file mode 100644
-index 0000000..2ca05d7
+index 0000000..6473485
 --- /dev/null
 +++ b/fs/proc/proc_misc.c
 @@ -0,0 +1,129 @@
@@ -114,7 +114,7 @@ index 0000000..2ca05d7
 +        return 0;
 +}
 +
-+static int casio_read(struct file *filp, char *buf, size_t count, loff_t *f_pos)
++static ssize_t casio_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
 +{
 +        char buffer[CASIO_MSG_SIZE];
 +        unsigned int len=0,k,i;
@@ -301,7 +301,7 @@ index 10fbb80..67e950b 100644
  
  #endif /* _UAPI_LINUX_SCHED_TYPES_H */
 diff --git a/kernel/sched/core.c b/kernel/sched/core.c
-index fe365c9..e5fe6cf 100644
+index fe365c9..12aa749 100644
 --- a/kernel/sched/core.c
 +++ b/kernel/sched/core.c
 @@ -5,6 +5,7 @@
@@ -354,7 +354,7 @@ index fe365c9..e5fe6cf 100644
  	const struct sched_class *class;
  	struct task_struct *p;
  
-@@ -3410,16 +3432,21 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
+@@ -3410,6 +3432,7 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
   */
  static void __sched notrace __schedule(bool preempt)
  {
@@ -362,14 +362,7 @@ index fe365c9..e5fe6cf 100644
  	struct task_struct *prev, *next;
  	unsigned long *switch_count;
  	struct rq_flags rf;
- 	struct rq *rq;
- 	int cpu;
--
-+/*
-+#ifdef  CONFIG_SCHED_CASIO_POLICY
-+        char msg[CASIO_MSG_SIZE];
-+#endif
-+*/
+@@ -3419,7 +3442,7 @@ static void __sched notrace __schedule(bool preempt)
  	cpu = smp_processor_id();
  	rq = cpu_rq(cpu);
  	prev = rq->curr;
@@ -378,7 +371,7 @@ index fe365c9..e5fe6cf 100644
  	schedule_debug(prev);
  
  	if (sched_feat(HRTICK))
-@@ -3427,7 +3454,8 @@ static void __sched notrace __schedule(bool preempt)
+@@ -3427,7 +3450,8 @@ static void __sched notrace __schedule(bool preempt)
  
  	local_irq_disable();
  	rcu_note_context_switch(preempt);
@@ -388,7 +381,7 @@ index fe365c9..e5fe6cf 100644
  	/*
  	 * Make sure that signal_pending_state()->signal_pending() below
  	 * can't be reordered with __set_current_state(TASK_INTERRUPTIBLE)
-@@ -3439,43 +3467,79 @@ static void __sched notrace __schedule(bool preempt)
+@@ -3439,40 +3463,51 @@ static void __sched notrace __schedule(bool preempt)
  	rq_lock(rq, &rf);
  	smp_mb__after_spinlock();
  
@@ -443,35 +436,7 @@ index fe365c9..e5fe6cf 100644
  	clear_tsk_need_resched(prev);
  	clear_preempt_need_resched();
  
-+/*
-+ * The variable prev is a pointer to the task that is being replaced by other task by next variable.
-+ * The next variable catches the return of the pick_next_task function that calls the pick_next_task of each scheduling class.
-+ * The function invoked registers the context switch event.
-+ */
-+
-+/*
-+#ifdef  CONFIG_SCHED_CASIO_POLICY
-+        if(prev->policy==SCHED_CASIO || next->policy==SCHED_CASIO){
-+                if(prev->policy==SCHED_CASIO && next->policy==SCHED_CASIO){
-+                        snprintf(msg,CASIO_MSG_SIZE,"prev->(%d:%d),next->(%d:%d)",prev->casio_id,prev->pid,next->casio_id,next->pid);
-+                }
-+                else{
-+                        if(prev->policy==SCHED_CASIO){
-+                                snprintf(msg,CASIO_MSG_SIZE,"prev->(%d:%d),next->(-1:%d)",prev->casio_id,prev->pid,next->pid);
-+                        }else{
-+                                snprintf(msg,CASIO_MSG_SIZE,"prev->(-1:%d),next->(%d:%d)",prev->pid,next->casio_id,next->pid);
-+                        }
-+                }
-+                register_casio_event(sched_clock(), msg, CASIO_CONTEXT_SWITCH);
-+
-+
-+        }
-+#endif
-+*/
- 	if (likely(prev != next)) {
- 		rq->nr_switches++;
- 		rq->curr = next;
-@@ -3537,6 +3601,7 @@ static inline void sched_submit_work(struct task_struct *tsk)
+@@ -3537,6 +3572,7 @@ static inline void sched_submit_work(struct task_struct *tsk)
  
  asmlinkage __visible void __sched schedule(void)
  {
@@ -479,7 +444,7 @@ index fe365c9..e5fe6cf 100644
  	struct task_struct *tsk = current;
  
  	sched_submit_work(tsk);
-@@ -3913,7 +3978,7 @@ void set_user_nice(struct task_struct *p, long nice)
+@@ -3913,7 +3949,7 @@ void set_user_nice(struct task_struct *p, long nice)
  	 * it wont have any effect on scheduling until the task is
  	 * SCHED_DEADLINE, SCHED_FIFO or SCHED_RR:
  	 */
@@ -488,7 +453,7 @@ index fe365c9..e5fe6cf 100644
  		p->static_prio = NICE_TO_PRIO(nice);
  		goto out_unlock;
  	}
-@@ -4106,6 +4171,7 @@ static void __setscheduler_params(struct task_struct *p,
+@@ -4106,6 +4142,7 @@ static void __setscheduler_params(struct task_struct *p,
  static void __setscheduler(struct rq *rq, struct task_struct *p,
  			   const struct sched_attr *attr, bool keep_boost)
  {
@@ -496,20 +461,13 @@ index fe365c9..e5fe6cf 100644
  	__setscheduler_params(p, attr);
  
  	/*
-@@ -4115,11 +4181,24 @@ static void __setscheduler(struct rq *rq, struct task_struct *p,
+@@ -4115,11 +4152,18 @@ static void __setscheduler(struct rq *rq, struct task_struct *p,
  	p->prio = normal_prio(p);
  	if (keep_boost)
  		p->prio = rt_effective_prio(p, p->prio);
 -
--	if (dl_prio(p->prio))
-+/*
-+ * Setting the sched class field of the struct task struct variable that represents the task in the system with the address of new scheduling class variable.
-+ */
-+#ifdef CONFIG_SCHED_CASIO_POLICY
-+        if (p->policy == SCHED_CASIO)
-+                p->sched_class = &casio_sched_class;
-+#endif
-+	else if (dl_prio(p->prio))
++	
+ 	if (dl_prio(p->prio))
  		p->sched_class = &dl_sched_class;
  	else if (rt_prio(p->prio))
  		p->sched_class = &rt_sched_class;
@@ -517,13 +475,13 @@ index fe365c9..e5fe6cf 100644
 + * Setting the sched class field of the struct task struct variable that represents the task in the system with the address of new scheduling class variable.
 + */
 +#ifdef CONFIG_SCHED_CASIO_POLICY
-+        else if (p->policy == SCHED_CASIO)
++        else if ((p->prio) == SCHED_CASIO)
 +                p->sched_class = &casio_sched_class;
 +#endif
  	else
  		p->sched_class = &fair_sched_class;
  }
-@@ -4144,6 +4223,7 @@ static int __sched_setscheduler(struct task_struct *p,
+@@ -4144,6 +4188,7 @@ static int __sched_setscheduler(struct task_struct *p,
  				const struct sched_attr *attr,
  				bool user, bool pi)
  {
@@ -531,7 +489,7 @@ index fe365c9..e5fe6cf 100644
  	int newprio = dl_policy(attr->sched_policy) ? MAX_DL_PRIO - 1 :
  		      MAX_RT_PRIO - 1 - attr->sched_priority;
  	int retval, oldprio, oldpolicy = -1, queued, running;
-@@ -4216,6 +4296,9 @@ static int __sched_setscheduler(struct task_struct *p,
+@@ -4216,6 +4261,9 @@ static int __sched_setscheduler(struct task_struct *p,
  		if (dl_policy(policy))
  			return -EPERM;
  
@@ -541,7 +499,7 @@ index fe365c9..e5fe6cf 100644
  		/*
  		 * Treat SCHED_IDLE as nice 20. Only allow a switch to
  		 * SCHED_NORMAL if the RLIMIT_NICE would normally permit it.
-@@ -4272,13 +4355,23 @@ static int __sched_setscheduler(struct task_struct *p,
+@@ -4272,13 +4320,23 @@ static int __sched_setscheduler(struct task_struct *p,
  			goto change;
  		if (dl_policy(policy) && dl_param_changed(p, attr))
  			goto change;
@@ -565,7 +523,7 @@ index fe365c9..e5fe6cf 100644
  	if (user) {
  #ifdef CONFIG_RT_GROUP_SCHED
  		/*
-@@ -4352,6 +4445,13 @@ static int __sched_setscheduler(struct task_struct *p,
+@@ -4352,6 +4410,13 @@ static int __sched_setscheduler(struct task_struct *p,
  		put_prev_task(rq, p);
  
  	prev_class = p->sched_class;
@@ -579,7 +537,7 @@ index fe365c9..e5fe6cf 100644
  	__setscheduler(rq, p, attr, pi);
  
  	if (queued) {
-@@ -4386,6 +4486,7 @@ static int __sched_setscheduler(struct task_struct *p,
+@@ -4386,6 +4451,7 @@ static int __sched_setscheduler(struct task_struct *p,
  static int _sched_setscheduler(struct task_struct *p, int policy,
  			       const struct sched_param *param, bool check)
  {
@@ -587,7 +545,7 @@ index fe365c9..e5fe6cf 100644
  	struct sched_attr attr = {
  		.sched_policy   = policy,
  		.sched_priority = param->sched_priority,
-@@ -4420,6 +4521,7 @@ EXPORT_SYMBOL_GPL(sched_setscheduler);
+@@ -4420,6 +4486,7 @@ EXPORT_SYMBOL_GPL(sched_setscheduler);
  
  int sched_setattr(struct task_struct *p, const struct sched_attr *attr)
  {
@@ -595,47 +553,16 @@ index fe365c9..e5fe6cf 100644
  	return __sched_setscheduler(p, attr, true, true);
  }
  EXPORT_SYMBOL_GPL(sched_setattr);
-@@ -4742,7 +4844,9 @@ SYSCALL_DEFINE4(sched_getattr, pid_t, pid, struct sched_attr __user *, uattr,
+@@ -4742,7 +4809,7 @@ SYSCALL_DEFINE4(sched_getattr, pid_t, pid, struct sched_attr __user *, uattr,
  	attr.sched_policy = p->policy;
  	if (p->sched_reset_on_fork)
  		attr.sched_flags |= SCHED_FLAG_RESET_ON_FORK;
 -	if (task_has_dl_policy(p))
-+	if (task_has_casio_policy(p))
-+		__getparam_casio(p, &attr);
 +	else if (task_has_dl_policy(p))
  		__getparam_dl(p, &attr);
  	else if (task_has_rt_policy(p))
  		attr.sched_priority = p->rt_priority;
-@@ -4814,7 +4918,11 @@ long sched_setaffinity(pid_t pid, const struct cpumask *in_mask)
- 	 * root_domain.
- 	 */
- #ifdef CONFIG_SMP
--	if (task_has_dl_policy(p) && dl_bandwidth_enabled()) {
-+	if ((task_has_dl_policy(p) && dl_bandwidth_enabled())
-+#ifdef CONFIG_CASIO_SCHED_POLICY
-+		|| (task_has_casio_policy(p) && casio_bandwidth_enabled())
-+#endif
-+	) {
- 		rcu_read_lock();
- 		if (!cpumask_subset(task_rq(p)->rd->span, new_mask)) {
- 			retval = -EBUSY;
-@@ -5191,6 +5299,7 @@ SYSCALL_DEFINE1(sched_get_priority_max, int, policy)
- 	case SCHED_NORMAL:
- 	case SCHED_BATCH:
- 	case SCHED_IDLE:
-+	case SCHED_CASIO:
- 		ret = 0;
- 		break;
- 	}
-@@ -5218,6 +5327,7 @@ SYSCALL_DEFINE1(sched_get_priority_min, int, policy)
- 	case SCHED_NORMAL:
- 	case SCHED_BATCH:
- 	case SCHED_IDLE:
-+	case SCHED_CASIO:
- 		ret = 0;
- 	}
- 	return ret;
-@@ -6027,6 +6137,13 @@ void __init sched_init(void)
+@@ -6027,6 +6094,13 @@ void __init sched_init(void)
  #ifdef CONFIG_FAIR_GROUP_SCHED
  		root_task_group.shares = ROOT_TASK_GROUP_LOAD;
  		INIT_LIST_HEAD(&rq->leaf_cfs_rq_list);
@@ -649,7 +576,7 @@ index fe365c9..e5fe6cf 100644
  		rq->tmp_alone_branch = &rq->leaf_cfs_rq_list;
  		/*
  		 * How much CPU bandwidth does root_task_group get?
-@@ -6112,6 +6229,13 @@ void __init sched_init(void)
+@@ -6112,6 +6186,13 @@ void __init sched_init(void)
  
  	init_schedstats();
  
