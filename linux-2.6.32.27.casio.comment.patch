@@ -1,0 +1,936 @@
+diff --git a/Makefile b/Makefile
+index ebfa20c..73e9695 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,7 +1,8 @@
+ VERSION = 2
+ PATCHLEVEL = 6
+ SUBLEVEL = 32
+-EXTRAVERSION = .27
++# Changing the version to indicate CASIO implementation
++EXTRAVERSION = .27.casio
+ NAME = Man-Eating Seals of Antiquity
+ 
+ # *DOCUMENTATION*
+diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
+index cb5a57c..29d9391 100644
+--- a/arch/x86/Kconfig
++++ b/arch/x86/Kconfig
+@@ -2079,6 +2079,17 @@ config HAVE_ATOMIC_IOMAP
+ 	def_bool y
+ 	depends on X86_32
+ 
++# The following entry adds a new configuration option to wrap all SCHED CASIO Linux Scheduler code.
++# The bool directive states that the option entry is a feature and can only be set using two values(y or n).
++# The name "CASIO scheduling policy" provides the name of this option in the various configuration utilities.
++# The default value of this option is set as y.
++menu "CASIO scheduler"
++
++config SCHED_CASIO_POLICY
++	bool "CASIO scheduling policy"
++	default y
++endmenu
++
+ source "net/Kconfig"
+ 
+ source "drivers/Kconfig"
+diff --git a/fs/proc/Makefile b/fs/proc/Makefile
+index 11a7b5c..e21a13f 100644
+--- a/fs/proc/Makefile
++++ b/fs/proc/Makefile
+@@ -19,6 +19,8 @@ proc-y	+= stat.o
+ proc-y	+= uptime.o
+ proc-y	+= version.o
+ proc-y	+= softirqs.o
++# Adding proc_misc object file to register CASIO events.
++proc-y  += proc_misc.o
+ proc-$(CONFIG_PROC_SYSCTL)	+= proc_sysctl.o
+ proc-$(CONFIG_NET)		+= proc_net.o
+ proc-$(CONFIG_PROC_KCORE)	+= kcore.o
+diff --git a/fs/proc/proc_misc.c b/fs/proc/proc_misc.c
+new file mode 100644
+index 00000000..20380ec
+--- /dev/null
++++ b/fs/proc/proc_misc.c
+@@ -0,0 +1,129 @@
++/*
++ *  linux/fs/proc/proc_misc.c
++ *
++ *  linux/fs/proc/array.c
++ *  Copyright (C) 1992  by Linus Torvalds
++ *  based on ideas by Darren Senn
++ *
++ *  This used to be the part of array.c. See the rest of history and credits
++ *  there. I took this into a separate file and switched the thing to generic
++ *  proc_file_inode_operations, leaving in array.c only per-process stuff.
++ *  Inumbers allocation made dynamic (via create_proc_entry()).  AV, May 1999.
++ *
++ * Changes:
++ * Fulton Green      :  Encapsulated position metric calculations.
++ *                      <kernel@FultonGreen.com>
++ */
++
++#include <linux/types.h>
++#include <linux/errno.h>
++#include <linux/time.h>
++#include <linux/kernel.h>
++#include <linux/kernel_stat.h>
++#include <linux/fs.h>
++#include <linux/tty.h>
++#include <linux/string.h>
++#include <linux/mman.h>
++#include <linux/proc_fs.h>
++#include <linux/ioport.h>
++#include <linux/mm.h>
++#include <linux/mmzone.h>
++#include <linux/pagemap.h>
++#include <linux/swap.h>
++#include <linux/slab.h>
++#include <linux/smp.h>
++#include <linux/signal.h>
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/seq_file.h>
++#include <linux/times.h>
++#include <linux/profile.h>
++#include <linux/utsname.h>
++#include <linux/blkdev.h>
++#include <linux/hugetlb.h>
++#include <linux/jiffies.h>
++#include <linux/sysrq.h>
++#include <linux/vmalloc.h>
++#include <linux/crash_dump.h>
++#include <linux/pid_namespace.h>
++#include <asm/uaccess.h>
++#include <asm/pgtable.h>
++#include <asm/io.h>
++#include <asm/tlb.h>
++#include <asm/div64.h>
++#include "internal.h"
++
++#ifdef  CONFIG_SCHED_CASIO_POLICY
++#define CASIO_MAX_CURSOR_LINES_EVENTS   1
++
++static int casio_open(struct inode *inode, struct file *file)
++{
++        return 0;
++}
++
++static int casio_read(char *filp, char *buf, size_t count, loff_t *f_pos)
++{
++        char buffer[CASIO_MSG_SIZE];
++        unsigned int len=0,k,i;
++	/*
++	 * Registering the struct casio_event_log in kernel and invocation of casio_event_log function.
++	 */
++        struct casio_event_log *log=NULL;
++        buffer[0]='\0';
++        log=get_casio_event_log();
++        if(log){
++                if(log->cursor < log->lines){
++                        k=(log->lines > (log->cursor + CASIO_MAX_CURSOR_LINES_EVENTS))?(log->cursor + CASIO_MAX_CURSOR_LINES_EVENTS):(log->lines);
++                        for(i=log->cursor; i<k;i++){
++                                len = snprintf(buffer, count, "%s%d,%llu,%s\n",
++                                        buffer,
++                                        log->casio_event[i].action,
++                                        log->casio_event[i].timestamp,
++                                        log->casio_event[i].msg);
++                        }
++                        log->cursor=k;
++                }
++                if(len) 
++                        copy_to_user(buf,buffer,len);
++
++        }
++        return len;
++}
++
++static int casio_release(struct inode *inode, struct file *file)
++{
++        return 0;
++}
++
++/*
++ * The fields are function callbacks to CASIO task operations
++ */
++static const struct file_operations proc_casio_operations = {
++        .open           = casio_open,
++        .read           = casio_read,
++        .release        = casio_release,
++};
++
++/*
++ * Initializes the CASIO operations event.
++ */
++int __init proc_casio_init(void)
++{
++        /*struct proc_dir_entry *casio_entry;
++
++        casio_entry = create_proc_entry("casio_event", 0666, &proc_root);
++
++        if (casio_entry){
++                casio_entry->proc_fops = &proc_casio_operations;
++                casio_entry->data=NULL;
++		return 0;
++        }
++
++	return -1;*/
++
++	proc_create("casio_event", 0, NULL, &proc_casio_operations);
++        return 0;
++}
++module_init(proc_casio_init);
++#endif
++
+diff --git a/include/linux/sched.h b/include/linux/sched.h
+index 957a25f..db925fa 100644
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -38,6 +38,12 @@
+ #define SCHED_BATCH		3
+ /* SCHED_ISO: reserved but not implemented yet */
+ #define SCHED_IDLE		5
++/*
++ * The following line declares macro for SCHED CASIO Linux Scheduler.
++ */
++#ifdef CONFIG_SCHED_CASIO_POLICY
++#define SCHED_CASIO		6
++#endif
+ /* Can be ORed in to make sure the process is reverted back to SCHED_NORMAL on fork */
+ #define SCHED_RESET_ON_FORK     0x40000000
+ 
+@@ -45,6 +51,16 @@
+ 
+ struct sched_param {
+ 	int sched_priority;
++/*
++ * Modifying sched_param to set the required scheduling parameters.
++ * Field casio_id is used to set the logical identifier of a CASIO task.
++ * The relative deadline of each CASIO task is set on the deadline.
++ * Its units are in nanoseconds.
++ */
++#ifdef	CONFIG_SCHED_CASIO_POLICY
++	unsigned int	casio_id;
++	unsigned long long deadline;
++#endif
+ };
+ 
+ #include <asm/param.h>	/* for HZ */
+@@ -1222,6 +1238,15 @@ struct sched_rt_entity {
+ struct rcu_node;
+ 
+ struct task_struct {
++/*
++ * Field casio_id is used to set the logical identifier of a CASIO task.
++ * The relative deadline of each CASIO task is set on the deadline.
++ * Its units are in nanoseconds.
++ */
++#ifdef CONFIG_SCHED_CASIO_POLICY
++	unsigned int casio_id;
++	unsigned long long deadline;
++#endif
+ 	volatile long state;	/* -1 unrunnable, 0 runnable, >0 stopped */
+ 	void *stack;
+ 	atomic_t usage;
+@@ -2617,4 +2642,42 @@ static inline unsigned long rlimit_max(unsigned int limit)
+ 
+ #endif /* __KERNEL__ */
+ 
++/*
++ * MSG_SIZE indicates the maximum message size of the msg string.
++ */
++#ifdef	CONFIG_SCHED_CASIO_POLICY
++
++#define CASIO_MSG_SIZE		400
++#define CASIO_MAX_EVENT_LINES	10000
++
++/*
++ * CASIO_ENQUEUE, CASIO_DEQUEUE, CASIO_CONTEXT_SWITCH, CASIO_MSG are the four actions related to CASIO events.
++ */
++#define CASIO_ENQUEUE		1
++#define CASIO_DEQUEUE		2
++#define	CASIO_CONTEXT_SWITCH	3
++#define	CASIO_MSG		4
++
++/*
++ * action refers to CASIO related events.
++ * timestamp field refers to the instant time at which the action happened.
++ * msg is the field used to write message for debugging.
++ */
++struct casio_event{
++	int action;
++	unsigned long long timestamp;
++	char msg[CASIO_MSG_SIZE];
++};
++
++struct casio_event_log{
++	struct casio_event casio_event[CASIO_MAX_EVENT_LINES];
++	unsigned long lines;
++	unsigned long cursor;
++};
++void init_casio_event_log();
++struct casio_event_log * get_casio_event_log();
++void register_casio_event(unsigned long long t, char *m, int a);
++
++#endif
++
+ #endif
+diff --git a/kernel/sched.c b/kernel/sched.c
+index 9652eca..cd35590 100644
+--- a/kernel/sched.c
++++ b/kernel/sched.c
+@@ -121,7 +121,14 @@
+ 
+ static inline int rt_policy(int policy)
+ {
+-	if (unlikely(policy == SCHED_FIFO || policy == SCHED_RR))
++	if (unlikely(policy == SCHED_FIFO || policy == SCHED_RR)
++/*
++ * Included SCHED_CASIO_POLICY as real time class, once SCHED_CASIO has higher priority than SCHED_RR and SCHEDFIFO.
++ */
++#ifdef CONFIG_SCHED_CASIO_POLICY
++	|| unlikely(policy == SCHED_CASIO)
++#endif
++)
+ 		return 1;
+ 	return 0;
+ }
+@@ -517,13 +524,47 @@ static struct root_domain def_root_domain;
+ #endif
+ 
+ /*
++ * The information about CASIO task is stored using struct casio_task data structure.
++ * The data type struct rb_node organizes CASIO tasks on the red-black tree.
++ * The absolute deadline is stored on absolute_deadline field.
++ * struct list_head casio_list_node organizes all CASIO tasks present in a system in a double linked list.
++ * task field is a pointer to the process description entry.
++ * 
++ */
++#ifdef CONFIG_SCHED_CASIO_POLICY
++struct casio_task {
++	struct rb_node casio_rb_node;
++	unsigned long long absolute_deadline;
++	struct list_head casio_list_node;
++	struct task_struct *task;
++};
++/*
++ * Each processor holds a run queue of all runnable processes assigned to it. 
++ * All CASIO tasks assigned to one processor are managed using the struct casio_rq data structure.
++ * The root of red-black tree is the field casio_rb_root.
++ * casio_list_head field is the list head of the data structure.
++ */
++struct casio_rq {
++	struct rb_root casio_rb_root;
++	struct list_head casio_list_head;
++	atomic_t nr_running;
++};
++#endif
++
++/*
+  * This is the main, per-CPU runqueue data structure.
+  *
+  * Locking rule: those places that want to lock multiple runqueues
+  * (such as the load balancing or the thread migration code), lock
+  * acquire operations must be ordered by ascending &runqueue.
+  */
++/*
++ * The field casio_rq of the type struct casio_rq is added in struct rq.
++ */
+ struct rq {
++#ifdef CONFIG_SCHED_CASIO_POLICY
++	struct casio_rq casio_rq;
++#endif
+ 	/* runqueue lock: */
+ 	spinlock_t lock;
+ 
+@@ -1852,8 +1893,22 @@ static inline void __set_task_cpu(struct task_struct *p, unsigned int cpu)
+ #ifdef CONFIG_SCHED_DEBUG
+ # include "sched_debug.c"
+ #endif
++/*
++ * The file sched_casio.c which implements CASIO module is included.
++ */
++#ifdef	CONFIG_SCHED_CASIO_POLICY
++# include "sched_casio.c"
++#endif
++
++/*
++ * The following lines inform the scheduler core that the casio_sched_class is the highest priority scheduler module.
++ */
++#ifdef CONFIG_SCHED_CASIO_POLICY
++	#define sched_class_highest (&casio_sched_class)
++#else
++	#define sched_class_highest (&rt_sched_class)
++#endif
+ 
+-#define sched_class_highest (&rt_sched_class)
+ #define for_each_class(class) \
+    for (class = sched_class_highest; class; class = class->next)
+ 
+@@ -5561,6 +5616,10 @@ asmlinkage void __sched schedule(void)
+ 	struct rq *rq;
+ 	int cpu;
+ 
++#ifdef  CONFIG_SCHED_CASIO_POLICY
++        char msg[CASIO_MSG_SIZE];
++#endif
++
+ need_resched:
+ 	preempt_disable();
+ 	cpu = smp_processor_id();
+@@ -5596,6 +5655,28 @@ need_resched_nonpreemptible:
+ 
+ 	put_prev_task(rq, prev);
+ 	next = pick_next_task(rq);
++/*
++ * The variable prev is a pointer to the task that is being replaced by other task by next variable.
++ * The next variable catches the return of the pick_next_task function that calls the pick_next_task of each scheduling class.
++ * The function invoked registers the context switch event.
++ */
++#ifdef  CONFIG_SCHED_CASIO_POLICY
++        if(prev->policy==SCHED_CASIO || next->policy==SCHED_CASIO){
++                if(prev->policy==SCHED_CASIO && next->policy==SCHED_CASIO){
++                        snprintf(msg,CASIO_MSG_SIZE,"prev->(%d:%d),next->(%d:%d)",prev->casio_id,prev->pid,next->casio_id,next->pid); 
++                }
++                else{
++                        if(prev->policy==SCHED_CASIO){
++                                snprintf(msg,CASIO_MSG_SIZE,"prev->(%d:%d),next->(-1:%d)",prev->casio_id,prev->pid,next->pid); 
++                        }else{
++                                snprintf(msg,CASIO_MSG_SIZE,"prev->(-1:%d),next->(%d:%d)",prev->pid,next->casio_id,next->pid); 
++                        }
++                }
++                register_casio_event(sched_clock(), msg, CASIO_CONTEXT_SWITCH);
++
++
++        } 
++#endif
+ 
+ 	if (likely(prev != next)) {
+ 		sched_info_switch(prev, next);
+@@ -6333,6 +6414,14 @@ __setscheduler(struct rq *rq, struct task_struct *p, int policy, int prio)
+ 	case SCHED_RR:
+ 		p->sched_class = &rt_sched_class;
+ 		break;
++/*
++ * Setting the sched class field of the struct task struct variable that represents the task in the system with the address of new scheduling class variable.
++ */
++#ifdef CONFIG_SCHED_CASIO_POLICY
++	case SCHED_CASIO:
++		p->sched_class = &casio_sched_class;
++		break;
++#endif
+ 	}
+ 
+ 	p->rt_priority = prio;
+@@ -6380,7 +6469,14 @@ recheck:
+ 
+ 		if (policy != SCHED_FIFO && policy != SCHED_RR &&
+ 				policy != SCHED_NORMAL && policy != SCHED_BATCH &&
+-				policy != SCHED_IDLE)
++				policy != SCHED_IDLE 
++/*
++ * Sets the scheduling policy and scheduling parameters of the CASIO task.
++ */
++#ifdef CONFIG_SCHED_CASIO_POLICY
++				&& policy !=SCHED_CASIO
++#endif
++			)
+ 			return -EINVAL;
+ 	}
+ 
+@@ -6432,7 +6528,12 @@ recheck:
+ 		if (p->sched_reset_on_fork && !reset_on_fork)
+ 			return -EPERM;
+ 	}
+-
++#ifdef CONFIG_SCHED_CASIO_POLICY
++	if(policy==SCHED_CASIO){
++		p->deadline = param->deadline;
++		p->casio_id = param->casio_id;
++	}
++#endif
+ 	if (user) {
+ #ifdef CONFIG_RT_GROUP_SCHED
+ 		/*
+@@ -6478,6 +6579,13 @@ recheck:
+ 
+ 	oldprio = p->prio;
+ 	prev_class = p->sched_class;
++
++#ifdef CONFIG_SCHED_CASIO_POLICY
++       if(policy == SCHED_CASIO){
++               add_casio_task_2_list(&rq->casio_rq, p);
++       }
++#endif
++
+ 	__setscheduler(rq, p, policy, param->sched_priority);
+ 
+ 	if (running)
+@@ -9378,6 +9486,7 @@ void __init sched_init_smp(void)
+ 	free_cpumask_var(non_isolated_cpus);
+ 
+ 	init_sched_rt_class();
++	
+ }
+ #else
+ void __init sched_init_smp(void)
+@@ -9607,6 +9716,14 @@ void __init sched_init(void)
+ 		init_task_group.shares = init_task_group_load;
+ 		INIT_LIST_HEAD(&rq->leaf_cfs_rq_list);
+ #ifdef CONFIG_CGROUP_SCHED
++
++/*
++ * Since scheduler and run queue are initialized in this function, data fields related to CASIO also needs to be initialized.
++ * Here init_casio_rq function initalizes the casio_rq fields.
++ */
++#ifdef CONFIG_SCHED_CASIO_POLICY
++	init_casio_rq(&rq->casio_rq);
++#endif
+ 		/*
+ 		 * How much cpu bandwidth does init_task_group get?
+ 		 *
+@@ -9733,6 +9850,13 @@ void __init sched_init(void)
+ 
+ 	perf_event_init();
+ 
++/*
++ * The following function call registers the context switching.
++ */
++#ifdef CONFIG_SCHED_CASIO_POLICY
++	init_casio_event_log();
++#endif
++
+ 	scheduler_running = 1;
+ }
+ 
+diff --git a/kernel/sched_casio.c b/kernel/sched_casio.c
+new file mode 100644
+index 00000000..53001ad
+--- /dev/null
++++ b/kernel/sched_casio.c
+@@ -0,0 +1,425 @@
++/*
++ * casio-task scheduling class.
++ *
++ * 
++ */
++/*
++ * log functions.
++ */
++
++struct casio_event_log casio_event_log;
++
++struct casio_event_log * get_casio_event_log(void)
++{
++	return &casio_event_log;
++}
++void init_casio_event_log(void)
++{
++	char msg[CASIO_MSG_SIZE];
++	casio_event_log.lines=casio_event_log.cursor=0;
++	snprintf(msg,CASIO_MSG_SIZE,"init_casio_event_log:(%lu:%lu)", casio_event_log.lines, casio_event_log.cursor); 
++	register_casio_event(sched_clock(), msg, CASIO_MSG);
++
++}
++void register_casio_event(unsigned long long t, char *m, int a)
++{
++
++	if(casio_event_log.lines < CASIO_MAX_EVENT_LINES){
++		casio_event_log.casio_event[casio_event_log.lines].action=a;
++		casio_event_log.casio_event[casio_event_log.lines].timestamp=t;
++		strncpy(casio_event_log.casio_event[casio_event_log.lines].msg,m,CASIO_MSG_SIZE-1);
++		casio_event_log.lines++;
++	}
++	else{
++		printk(KERN_ALERT "register_casio_event: full\n");
++	}
++
++}
++/*
++ *casio tasks and casio rq
++ */
++void init_casio_rq(struct casio_rq *casio_rq)
++{
++	casio_rq->casio_rb_root=RB_ROOT;
++	INIT_LIST_HEAD(&casio_rq->casio_list_head);
++	atomic_set(&casio_rq->nr_running,0);
++}
++void add_casio_task_2_list(struct casio_rq *rq, struct task_struct *p)
++{
++	struct list_head *ptr=NULL;
++	struct casio_task *new=NULL, *casio_task=NULL;
++	char msg[CASIO_MSG_SIZE];
++	if(rq && p){
++		new=(struct casio_task *) kzalloc(sizeof(struct casio_task),GFP_KERNEL);
++		if(new){
++			casio_task=NULL;
++			new->task=p;
++			new->absolute_deadline=0;
++			list_for_each(ptr,&rq->casio_list_head){
++				casio_task=list_entry(ptr,struct casio_task, casio_list_node);
++				if(casio_task){
++					if(new->task->casio_id < casio_task->task->casio_id){
++						list_add(&new->casio_list_node,ptr);
++					}
++				}
++			}
++			list_add(&new->casio_list_node,&rq->casio_list_head);
++			snprintf(msg,CASIO_MSG_SIZE,"add_casio_task_2_list: %d:%d:%llu",new->task->casio_id,new->task->pid,new->absolute_deadline); 
++			register_casio_event(sched_clock(), msg, CASIO_MSG);
++		}
++		else{
++			printk(KERN_ALERT "add_casio_task_2_list: kzalloc\n");
++		}
++	}
++	else{
++		printk(KERN_ALERT "add_casio_task_2_list: null pointers\n");
++	}
++}
++struct casio_task * find_casio_task_list(struct casio_rq *rq, struct task_struct *p)
++{
++	struct list_head *ptr=NULL;
++	struct casio_task *casio_task=NULL;
++	if(rq && p){
++		list_for_each(ptr,&rq->casio_list_head){
++			casio_task=list_entry(ptr,struct casio_task, casio_list_node);
++			if(casio_task){
++				if(casio_task->task->casio_id == p->casio_id){
++					return casio_task;
++				}
++			}
++		}
++	}
++	return NULL;
++}
++void rem_casio_task_list(struct casio_rq *rq, struct task_struct *p)
++{
++	struct list_head *ptr=NULL,*next=NULL;
++	struct casio_task *casio_task=NULL;
++	char msg[CASIO_MSG_SIZE];
++	if(rq && p){
++		list_for_each_safe(ptr,next,&rq->casio_list_head){
++			casio_task=list_entry(ptr,struct casio_task, casio_list_node);
++			if(casio_task){
++				if(casio_task->task->casio_id == p->casio_id){
++					list_del(ptr);
++					snprintf(msg,CASIO_MSG_SIZE,"rem_casio_task_list: %d:%d:%llu",casio_task->task->casio_id,casio_task->task->pid,casio_task->absolute_deadline); 
++					register_casio_event(sched_clock(), msg, CASIO_MSG);
++					kfree(casio_task);
++					return;
++				}
++			}
++		}
++	}
++}
++/*
++ * rb_tree functions.
++ */
++
++void remove_casio_task_rb_tree(struct casio_rq *rq, struct casio_task *p)
++{
++	rb_erase(&(p->casio_rb_node),&(rq->casio_rb_root));
++	p->casio_rb_node.rb_left=p->casio_rb_node.rb_right=NULL;
++}
++void insert_casio_task_rb_tree(struct casio_rq *rq, struct casio_task *p)
++{
++	struct rb_node **node=NULL;
++	struct rb_node *parent=NULL;
++	struct casio_task *entry=NULL;
++	node=&rq->casio_rb_root.rb_node;
++	while(*node!=NULL){
++		parent=*node;
++		entry=rb_entry(parent, struct casio_task,casio_rb_node);
++		if(entry){
++			if(p->absolute_deadline < entry->absolute_deadline){
++				node=&parent->rb_left;
++			}else{
++				node=&parent->rb_right;
++			}
++		}
++	}
++	rb_link_node(&p->casio_rb_node,parent,node);
++	rb_insert_color(&p->casio_rb_node,&rq->casio_rb_root);
++}
++struct casio_task * earliest_deadline_casio_task_rb_tree(struct casio_rq *rq)
++{
++	struct rb_node *node=NULL;
++	struct casio_task *p=NULL;
++	node=rq->casio_rb_root.rb_node;
++	if(node==NULL)
++		return NULL;
++
++	while(node->rb_left!=NULL){
++		node=node->rb_left;
++	}
++	p=rb_entry(node, struct casio_task,casio_rb_node);
++	return p;
++}
++
++/*
++ * check_preempt_curr_casio function checks whether the the current running task has to be preempted. 
++ * It is invoked followed by the enqueuing or dequeuing of a task.
++ */
++static void check_preempt_curr_casio(struct rq *rq, struct task_struct *p, int flags)
++{
++	struct casio_task *t=NULL,*curr=NULL;
++	if(rq->curr->policy!=SCHED_CASIO){
++		resched_task(rq->curr);
++	}
++	else{
++		t=earliest_deadline_casio_task_rb_tree(&rq->casio_rq);
++		if(t){
++			curr=find_casio_task_list(&rq->casio_rq,rq->curr);
++			if(curr){
++				if(t->absolute_deadline < curr->absolute_deadline)
++					resched_task(rq->curr);
++			}
++			else{
++				printk(KERN_ALERT "check_preempt_curr_casio\n");
++			}
++		}
++	}
++}
++
++/*
++ * pick_next_task_casio function selects the task to be executed by the processor.
++ * It is invoked by the scheduler core whenever the currently running task is marked to be preempted.
++ */
++static struct task_struct *pick_next_task_casio(struct rq *rq)
++{
++	struct casio_task *t=NULL;
++	t=earliest_deadline_casio_task_rb_tree(&rq->casio_rq);
++	if(t){
++		return t->task;
++	}
++	return NULL;
++}
++
++/*
++ * The enqueue_task_casio is called whenever a CASIO task enters in a runnable way. It receives two pointers.
++ * One pointer is for the run queue of the processor, another for the task that is entering in a runnable state.
++ * It updates the absolute deadline and insert the casio_task on the red-black tree.
++ */
++static void enqueue_task_casio(struct rq *rq, struct task_struct *p, int wakeup, bool head)
++{
++	struct casio_task *t=NULL;
++	char msg[CASIO_MSG_SIZE];
++	if(p){
++		t=find_casio_task_list(&rq->casio_rq,p);
++		if(t){
++			t->absolute_deadline=sched_clock()+p->deadline;
++			insert_casio_task_rb_tree(&rq->casio_rq, t);
++			atomic_inc(&rq->casio_rq.nr_running);
++			snprintf(msg,CASIO_MSG_SIZE,"(%d:%d:%llu)",p->casio_id,p->pid,t->absolute_deadline); 
++			register_casio_event(sched_clock(), msg, CASIO_ENQUEUE);
++		}
++		else{
++			printk(KERN_ALERT "enqueue_task_casio\n");
++		}
++	}
++}
++
++/*
++ * dequeue_task_casio is called when the CASIO task is no longer runnable and undoes the work of enqueue_task_casio function.
++ */
++static void dequeue_task_casio(struct rq *rq, struct task_struct *p, int sleep)
++{
++	struct casio_task *t=NULL;
++	char msg[CASIO_MSG_SIZE];
++	if(p){
++		t=find_casio_task_list(&rq->casio_rq,p);
++		if(t){
++			snprintf(msg,CASIO_MSG_SIZE,"(%d:%d:%llu)",t->task->casio_id,t->task->pid,t->absolute_deadline); 
++			register_casio_event(sched_clock(), msg, CASIO_DEQUEUE);	
++			remove_casio_task_rb_tree(&rq->casio_rq, t);
++			atomic_dec(&rq->casio_rq.nr_running);
++			if(t->task->state==TASK_DEAD || t->task->state==EXIT_DEAD || t->task->state==EXIT_ZOMBIE){
++				rem_casio_task_list(&rq->casio_rq,t->task);
++			}
++		}
++		else{
++			printk(KERN_ALERT "dequeue_task_casio\n");
++		}
++	}
++
++}
++
++static void put_prev_task_casio(struct rq *rq, struct task_struct *prev)
++{
++
++}
++
++#ifdef CONFIG_SMP
++static unsigned long load_balance_casio(struct rq *this_rq, int this_cpu, struct rq *busiest,
++		  unsigned long max_load_move,
++		  struct sched_domain *sd, enum cpu_idle_type idle,
++		  int *all_pinned, int *this_best_prio)
++{
++	return 0;
++}
++
++static int move_one_task_casio(struct rq *this_rq, int this_cpu, struct rq *busiest,
++		   struct sched_domain *sd, enum cpu_idle_type idle)
++{
++	return 0;
++}
++#endif
++
++static void task_tick_casio(struct rq *rq, struct task_struct *p, int queued)
++{
++	//check_preempt_curr_casio(rq, p);
++}
++
++static void set_curr_task_casio(struct rq *rq)
++{
++
++}
++
++
++/*
++ * When switching a task to RT, we may overload the runqueue
++ * with RT tasks. In this case we try to push them off to
++ * other runqueues.
++ */
++static void switched_to_casio(struct rq *rq, struct task_struct *p,
++                           int running)
++{
++        /*
++         * If we are already running, then there's nothing
++         * that needs to be done. But if we are not running
++         * we may need to preempt the current running task.
++         * If that current running task is also an RT task
++         * then see if we can move to another run queue.
++         */
++}
++
++
++unsigned int get_rr_interval_casio(struct rq *rq, struct task_struct *task)
++{
++	/*
++         * Time slice is 0 for SCHED_FIFO tasks
++         */
++        if (task->policy == SCHED_RR)
++                return DEF_TIMESLICE;
++        else
++                return 0;
++}
++
++static void yield_task_casio(struct rq *rq)
++{
++
++}
++
++
++/*
++ * Priority of the task has changed. This may cause
++ * us to initiate a push or pull.
++ */
++static void prio_changed_casio(struct rq *rq, struct task_struct *p,
++			    int oldprio, int running)
++{
++
++}
++
++static int select_task_rq_casio(struct rq *rq, struct task_struct *p, int sd_flag, int flags)
++{
++
++//	struct rq *rq = task_rq(p);
++
++	if (sd_flag != SD_BALANCE_WAKE)
++		return smp_processor_id();
++
++	return task_cpu(p);
++}
++
++
++static void set_cpus_allowed_casio(struct task_struct *p,
++				const struct cpumask *new_mask)
++{
++
++}
++
++/* Assumes rq->lock is held */
++static void rq_online_casio(struct rq *rq)
++{
++
++}
++
++/* Assumes rq->lock is held */
++static void rq_offline_casio(struct rq *rq)
++{
++
++}
++
++static void pre_schedule_casio(struct rq *rq, struct task_struct *prev)
++{
++
++}
++
++static void post_schedule_casio(struct rq *rq)
++{
++
++}
++/*
++ * If we are not running and we are not going to reschedule soon, we should
++ * try to push tasks away now
++ */
++static void task_woken_casio(struct rq *rq, struct task_struct *p)
++{
++/*        if (!task_running(rq, p) &&
++            !test_tsk_need_resched(rq->curr) &&
++            has_pushable_tasks(rq) &&
++            p->rt.nr_cpus_allowed > 1)
++                push_rt_tasks(rq);
++*/
++}
++
++/*
++ * When switch from the rt queue, we bring ourselves to a position
++ * that we might want to pull RT tasks from other runqueues.
++ */
++static void switched_from_casio(struct rq *rq, struct task_struct *p,
++			   int running)
++{
++
++}
++
++/*
++ * Simple, special scheduling class for the per-CPU casio tasks:
++ * Class for implementing the CASIO module.
++ * .next is a pointer to sched_class that is used to organize scheduler modules by priority in a linked list.
++ * The rest of the parameters are functions that act as callbacks to specific events.
++ */
++static const struct sched_class casio_sched_class = {
++	.next 			= &rt_sched_class,
++	.enqueue_task		= enqueue_task_casio,
++	.dequeue_task		= dequeue_task_casio,
++
++	.check_preempt_curr	= check_preempt_curr_casio,
++
++	.pick_next_task		= pick_next_task_casio,
++	.put_prev_task		= put_prev_task_casio,
++
++#ifdef CONFIG_SMP
++	.load_balance		= load_balance_casio,
++	.move_one_task		= move_one_task_casio,
++
++	.select_task_rq		= select_task_rq_casio,
++	.set_cpus_allowed       = set_cpus_allowed_casio,
++	.rq_online              = rq_online_casio,
++	.rq_offline             = rq_offline_casio,
++	.pre_schedule		= pre_schedule_casio,
++	.post_schedule		= post_schedule_casio,
++	.task_woken		= task_woken_casio,
++	.switched_from		= switched_from_casio,
++#endif
++
++	.set_curr_task          = set_curr_task_casio,
++	.task_tick		= task_tick_casio,
++
++	.switched_to		= switched_to_casio,
++
++	.yield_task		= yield_task_casio,
++	.get_rr_interval	= get_rr_interval_casio,
++
++	.prio_changed		= prio_changed_casio,
++};
