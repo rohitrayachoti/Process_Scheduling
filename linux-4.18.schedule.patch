@@ -40,6 +40,124 @@ index ead487e..115e692 100644
  proc-$(CONFIG_PROC_SYSCTL)	+= proc_sysctl.o
  proc-$(CONFIG_NET)		+= proc_net.o
  proc-$(CONFIG_PROC_KCORE)	+= kcore.o
+diff --git a/fs/proc/proc_sjnprio.c b/fs/proc/proc_sjnprio.c
+new file mode 100644
+index 00000000..5ca6882
+--- /dev/null
++++ b/fs/proc/proc_sjnprio.c
+@@ -0,0 +1,112 @@
++/*
++ *  linux/fs/proc/proc_sjnprio.c
++ *
++ *  linux/fs/proc/array.c
++ *  Copyright (C) 1992  by Linus Torvalds
++ *  based on ideas by Darren Senn
++ *
++ *  This used to be the part of array.c. See the rest of history and credits
++ *  there. I took this into a separate file and switched the thing to generic
++ *  proc_file_inode_operations, leaving in array.c only per-process stuff.
++ *  Inumbers allocation made dynamic (via create_proc_entry()).  AV, May 1999.
++ *
++ * Changes:
++ * Fulton Green      :  Encapsulated position metric calculations.
++ *                      <kernel@FultonGreen.com>
++ *
++ */
++
++#include <linux/types.h>
++#include <linux/errno.h>
++#include <linux/time.h>
++#include <linux/kernel.h>
++#include <linux/kernel_stat.h>
++#include <linux/fs.h>
++#include <linux/tty.h>
++#include <linux/string.h>
++#include <linux/mman.h>
++#include <linux/proc_fs.h>
++#include <linux/ioport.h>
++#include <linux/mm.h>
++#include <linux/mmzone.h>
++#include <linux/pagemap.h>
++#include <linux/swap.h>
++#include <linux/slab.h>
++#include <linux/smp.h>
++#include <linux/signal.h>
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/seq_file.h>
++#include <linux/times.h>
++#include <linux/profile.h>
++#include <linux/utsname.h>
++#include <linux/blkdev.h>
++#include <linux/hugetlb.h>
++#include <linux/jiffies.h>
++#include <linux/sysrq.h>
++#include <linux/vmalloc.h>
++#include <linux/crash_dump.h>
++#include <linux/pid_namespace.h>
++#include <asm/uaccess.h>
++#include <asm/pgtable.h>
++#include <asm/io.h>
++#include <asm/tlb.h>
++#include <asm/div64.h>
++#include "internal.h"
++#include "../../kernel/sched/sched.h"
++
++#ifdef  CONFIG_SCHED_SJNPRIO_POLICY
++#define SJNPRIO_MAX_CURSOR_LINES_EVENTS   1
++
++static int sjnprio_open(struct inode *inode, struct file *file)
++{
++        return 0;
++}
++
++
++static ssize_t sjnprio_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
++{
++        char buffer[SJNPRIO_MSG_SIZE];
++        unsigned int len=0,k,i;
++        struct sjnprio_event_log *log=NULL;
++        buffer[0]='\0';
++        log=get_sjnprio_event_log();
++        if(log){
++                if(log->cursor < log->lines){
++                        k=(log->lines > (log->cursor + SJNPRIO_MAX_CURSOR_LINES_EVENTS))?(log->cursor + SJNPRIO_MAX_CURSOR_LINES_EVENTS):(log->lines);
++                        for(i=log->cursor; i<k;i++){
++                                len = snprintf(buffer, count, "%s%c,%llu.%09llu,%s\n",
++                                        buffer,
++                                        SJNPRIO_EVENT_CODE(log->sjnprio_event[i].action),
++                                        log->sjnprio_event[i].timestamp / (1000 * 1000 * 1000), /* time / ns */
++                                        log->sjnprio_event[i].timestamp % (1000 * 1000 * 1000), /* time % ns */
++                                        log->sjnprio_event[i].msg);
++                        }
++                        log->cursor=k;
++                }
++                if(len) 
++                        copy_to_user(buf,buffer,len);
++
++        }
++        return len;
++}
++
++static int sjnprio_release(struct inode *inode, struct file *file)
++{
++        return 0;
++}
++
++static const struct file_operations proc_sjnprio_operations = {
++        .open           = sjnprio_open,
++        .read           = sjnprio_read,
++        .release        = sjnprio_release,
++};
++
++int __init proc_sjnprio_init(void)
++{
++	proc_create("sjnprio_event", 0, NULL, &proc_sjnprio_operations);
++        return 0;
++}
++module_init(proc_sjnprio_init);
++#endif
++
 diff --git a/include/linux/sched.h b/include/linux/sched.h
 index 43731fe..2565c24 100644
 --- a/include/linux/sched.h
@@ -314,3 +432,327 @@ index c7742dc..d5b9f33 100644
 +void register_sjnprio_event(unsigned long long t, char *m, int a);
 +
 +#endif
+diff --git a/kernel/sched/sched_sjnprio.c b/kernel/sched/sched_sjnprio.c
+new file mode 100644
+index 00000000..0c308c0
+--- /dev/null
++++ b/kernel/sched/sched_sjnprio.c
+@@ -0,0 +1,318 @@
++#include "sched.h"
++
++
++/*
++ * sjnprio-task scheduling class.
++ *
++ *
++ */
++
++/* =========================================================================
++ *                       Log Functions Implementation
++ */
++
++struct sjnprio_event_log sjnprio_event_log;
++
++struct sjnprio_event_log * get_sjnprio_event_log(void)
++{
++	return &sjnprio_event_log;
++}
++void init_sjnprio_event_log(void)
++{
++	char msg[SJNPRIO_MSG_SIZE];
++	sjnprio_event_log.lines=sjnprio_event_log.cursor=0;
++	snprintf(msg,SJNPRIO_MSG_SIZE,"init_sjnprio_event_log:(%lu:%lu)", sjnprio_event_log.lines, sjnprio_event_log.cursor);
++	register_sjnprio_event(sched_clock(), msg, SJNPRIO_MSG);
++
++}
++/* Logs an event if there's room */
++void register_sjnprio_event(unsigned long long t, char *m, int a)
++{
++
++	if(sjnprio_event_log.lines < SJNPRIO_MAX_EVENT_LINES){
++		sjnprio_event_log.sjnprio_event[sjnprio_event_log.lines].action=a;
++		sjnprio_event_log.sjnprio_event[sjnprio_event_log.lines].timestamp=t;
++		strncpy(sjnprio_event_log.sjnprio_event[sjnprio_event_log.lines].msg,m,SJNPRIO_MSG_SIZE-1);
++		sjnprio_event_log.lines++;
++		
++		printk(KERN_ALERT "sjnprio_event: %s\n", m);
++	}
++	else{
++		printk(KERN_ALERT "ERROR register_sjnprio_event full\n");
++	}
++
++}
++
++
++/* =========================================================================
++ *             Funcs for sjnprio tasks, and lists
++ */ 
++
++void init_sjnprio_rq(struct sjnprio_rq *sjnprio_rq)
++{
++	sjnprio_rq->sjnprio_rb_root=RB_ROOT;
++	INIT_LIST_HEAD(&sjnprio_rq->sjnprio_list_head);
++	atomic_set(&sjnprio_rq->nr_running,0);
++}
++
++/* =========================================================================
++ *                       rb_trees of sjnprio_tasks
++ */ 
++
++void remove_sjnprio_task_rb_tree(struct sjnprio_rq *rq, struct sched_sjnprio_entity *p)
++{
++	rb_erase(&(p->sjnprio_rb_node),&(rq->sjnprio_rb_root));
++	p->sjnprio_rb_node.rb_left=p->sjnprio_rb_node.rb_right=NULL;
++}
++
++void insert_sjnprio_task_rb_tree(struct sjnprio_rq *rq, struct sched_sjnprio_entity *p)
++{
++	struct rb_node **node=NULL;
++	struct rb_node *parent=NULL;
++	struct sched_sjnprio_entity *entry=NULL;
++	node=&rq->sjnprio_rb_root.rb_node;
++	while(*node!=NULL){
++		parent=*node;
++		entry=rb_entry(parent, struct sched_sjnprio_entity,sjnprio_rb_node);
++		if(entry){
++			if(p->sjnprio_time < entry->sjnprio_time){
++				node=&parent->rb_left;
++			}
++			else if(p->sjnprio_time > entry->sjnprio_time){
++				node=&parent->rb_right;
++			}
++			else{
++				if(p->sjnprio_prio < entry->sjnprio_prio){
++					node=&parent->rb_left;
++				}
++				else{
++					node=&parent->rb_right;
++				}
++			}
++		}
++	}
++	rb_link_node(&p->sjnprio_rb_node,parent,node);
++	rb_insert_color(&p->sjnprio_rb_node,&rq->sjnprio_rb_root);
++}
++struct sched_sjnprio_entity * shortest_runtimeprio_sjnprio_task_rb_tree(struct sjnprio_rq *rq)
++{
++	struct rb_node *node=NULL;
++	struct sched_sjnprio_entity *p=NULL;
++	node=rq->sjnprio_rb_root.rb_node;
++	if(node==NULL)
++		return NULL;
++
++	while(node->rb_left!=NULL){
++		node=node->rb_left;
++	}
++	p=rb_entry(node, struct sched_sjnprio_entity,sjnprio_rb_node);
++	return p;
++}
++
++/* If curr task is priority < SJNPRIO, or some other task has an earlier deadline, preempt */
++static void check_preempt_curr_sjnprio(struct rq *rq, struct task_struct *p, int flags)
++{
++
++	printk(KERN_ALERT "sjnprio: check_preempt_currl\n");
++}
++
++/* =========================================================================
++ *                  Implementation of Scheduler class functions
++ */
++
++/* Returns next task struct to be scheduled (Earliest deadline SJNPRIO task) */
++static struct task_struct *pick_next_task_sjnprio(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
++{
++	//printk(KERN_ALERT "sjnprio: pick_next_task\n");
++	
++	struct sched_sjnprio_entity *ce=NULL;
++	struct task_struct *p=NULL;
++	ce = shortest_runtimeprio_sjnprio_task_rb_tree(&rq->sjnprio);
++	if(ce){
++		p = container_of(ce, struct task_struct, sjnprio);
++		printk(KERN_ALERT "sjnprio: pick_next_task: picked cid%d, pid%d\n", ce->sjnprio_id, p->pid );
++		return p;
++	}
++	
++	return NULL;
++}
++
++
++/* Called when sjnprio task becomes runnable */
++/* Finds corresponding sjnprio_task in the given rq */
++/* inserts it into the rb-tree, updates deadline */
++/* If task already in the structure, */
++static void enqueue_task_sjnprio(struct rq *rq, struct task_struct *p, int flags)
++{
++	struct sched_sjnprio_entity *ce;
++	char msg[SJNPRIO_MSG_SIZE];
++
++	if(p){
++		ce=&(p->sjnprio);
++
++		insert_sjnprio_task_rb_tree(&rq->sjnprio, ce);
++		atomic_inc(&rq->sjnprio.nr_running);
++		snprintf(msg,SJNPRIO_MSG_SIZE,"ENQ(cid%d:pid%d:dl%llu.%09llu)",ce->sjnprio_id,p->pid,
++			ce->sjnprio_time / 1000000000, ce->sjnprio_prio % 1000000000);
++		register_sjnprio_event(sched_clock(), msg, SJNPRIO_ENQUEUE);
++	}
++}
++
++/* Called when sjnprio task unrunnable */
++/* Finds which rq's sjnprio list it's in */
++/* Removes it from rb tree */
++/* If task exited, destroy the sjnprio_task */
++static void dequeue_task_sjnprio(struct rq *rq, struct task_struct *p, int sleep)
++{
++	struct sched_sjnprio_entity *ce;
++	char msg[SJNPRIO_MSG_SIZE];
++	if(p){
++		ce = &(p->sjnprio);
++		
++		if(1){
++			snprintf(msg,SJNPRIO_MSG_SIZE,"DEQ(cid%d:pid%d:dl%llu.%09llu)",ce->sjnprio_id,p->pid,
++				ce->sjnprio_time / 1000000000, ce->sjnprio_prio % 1000000000);
++			register_sjnprio_event(sched_clock(), msg, SJNPRIO_DEQUEUE);
++
++			remove_sjnprio_task_rb_tree(&rq->sjnprio, ce);
++
++			atomic_dec(&rq->sjnprio.nr_running);
++
++		}
++		else{
++			printk(KERN_ALERT "error in dequeue_task_sjnprio\n");
++		}
++	}
++
++}
++
++static void put_prev_task_sjnprio(struct rq *rq, struct task_struct *prev) { }
++
++static void task_tick_sjnprio(struct rq *rq, struct task_struct *p, int queued)
++{
++	printk(KERN_ALERT "sjnprio: task_tick cid%d, pid%d\n", p->sjnprio.sjnprio_id, p->pid);
++	//check_preempt_curr_sjnprio(rq, p);
++}
++
++static void set_curr_task_sjnprio(struct rq *rq) { }
++
++
++/*
++ * When switching a task to RT, we may overload the runqueue
++ * with RT tasks. In this case we try to push them off to
++ * other runqueues.
++ */
++static void switched_to_sjnprio(struct rq *rq, struct task_struct *p)
++{
++	printk(KERN_ALERT "sjnprio: switched_to\n");
++        /*
++         * If we are already running, then there's nothing
++         * that needs to be done. But if we are not running
++         * we may need to preempt the current running task.
++         * If that current running task is also an RT task
++         * then see if we can move to another run queue.
++         */
++}
++
++
++unsigned int get_rr_interval_sjnprio(struct rq *rq, struct task_struct *task)
++{
++	printk(KERN_ALERT "sjnprio: get_rr_interval\n");
++	return 0;
++}
++
++static void yield_task_sjnprio(struct rq *rq) { 
++	printk(KERN_ALERT "sjnprio: yield_task\n");
++}
++
++
++/*
++ * Priority of the task has changed. This may cause
++ * us to initiate a push or pull.
++ */
++static void prio_changed_sjnprio(struct rq *rq, struct task_struct *p, int oldprio) { 
++	printk(KERN_ALERT "sjnprio: prio_changed\n");
++}
++
++static int select_task_rq_sjnprio(struct task_struct *task, int task_cpu, int sd_flag, int flags)
++{
++	printk(KERN_ALERT "sjnprio: select_task_rq\n");
++//	struct rq *rq = task_rq(p);
++
++	if (sd_flag != SD_BALANCE_WAKE)
++		return smp_processor_id();
++
++	return task_cpu;
++}
++
++
++static void set_cpus_allowed_sjnprio(struct task_struct *p, const struct cpumask *new_mask) { }
++
++/* Assumes rq->lock is held */
++static void rq_online_sjnprio(struct rq *rq) { }
++/* Assumes rq->lock is held */
++static void rq_offline_sjnprio(struct rq *rq) { }
++
++// OLD static void pre_schedule_sjnprio(struct rq *rq, struct task_struct *prev) { } 
++// OLD static void post_schedule_sjnprio(struct rq *rq) { }
++//
++/*
++ * If we are not running and we are not going to reschedule soon, we should
++ * try to push tasks away now
++ */
++static void task_woken_sjnprio(struct rq *rq, struct task_struct *p)
++{
++	printk(KERN_ALERT "sjnprio: task_woken\n");
++}
++
++/*
++ * When switch from the rt queue, we bring ourselves to a position
++ * that we might want to pull RT tasks from other runqueues.
++ */
++static void switched_from_sjnprio(struct rq *rq, struct task_struct *p) { }
++
++/*
++ * Simple, special scheduling class for the per-CPU sjnprio tasks:
++ */
++const struct sched_class sjnprio_sched_class = {
++/* old sched_class_highest was set to these in kernel/sched/sched.h */
++#ifdef CONFIG_SMP
++	.next 			= &stop_sched_class,
++#else
++	.next 			= &dl_sched_class,
++#endif
++	.enqueue_task		= enqueue_task_sjnprio,
++	.dequeue_task		= dequeue_task_sjnprio,
++
++	.yield_task		= yield_task_sjnprio,
++	.check_preempt_curr	= check_preempt_curr_sjnprio,
++
++	.pick_next_task		= pick_next_task_sjnprio,
++	.put_prev_task		= put_prev_task_sjnprio,
++
++#ifdef CONFIG_SMP
++	// OLD .load_balance		= load_balance_sjnprio,
++	// OLD .move_one_task		= move_one_task_sjnprio,
++
++	.select_task_rq		= select_task_rq_sjnprio,
++	
++	.task_woken		= task_woken_sjnprio,
++	.set_cpus_allowed       = set_cpus_allowed_sjnprio,
++
++	.rq_online              = rq_online_sjnprio,
++	.rq_offline             = rq_offline_sjnprio,
++	
++	// OLD .pre_schedule		= pre_schedule_sjnprio,
++	// OLD .post_schedule		= post_schedule_sjnprio,
++#endif
++
++	.set_curr_task          = set_curr_task_sjnprio,
++	.task_tick		= task_tick_sjnprio,
++
++	.switched_from		= switched_from_sjnprio,
++	.switched_to		= switched_to_sjnprio,
++	.prio_changed		= prio_changed_sjnprio,
++
++	.get_rr_interval	= get_rr_interval_sjnprio,
++
++};
